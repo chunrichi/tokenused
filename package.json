@@ -1,0 +1,94 @@
+{
+  "name": "copilot-token-tracker",
+  "displayName": "Copilot Token Tracker",
+  "description": "Track and visualize your GitHub Copilot token usage",
+  "version": "0.1.0",
+  "publisher": "tokenused",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "copilotTokenTracker.showDashboard",
+        "title": "Copilot Token Tracker: Show Dashboard"
+      },
+      {
+        "command": "copilotTokenTracker.syncNow",
+        "title": "Copilot Token Tracker: Sync Now"
+      },
+      {
+        "command": "copilotTokenTracker.searchSessions",
+        "title": "Copilot Token Tracker: Search Sessions"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "copilotTokenTracker",
+          "title": "Copilot Token Tracker",
+          "icon": "$(graph)"
+        }
+      ]
+    },
+    "views": {
+      "copilotTokenTracker": [
+        {
+          "type": "webview",
+          "id": "copilotTokenTracker.dashboard",
+          "name": "Token Usage"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Copilot Token Tracker",
+      "properties": {
+        "copilotTokenTracker.autoSync": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically sync token data on startup"
+        },
+        "copilotTokenTracker.syncIntervalMinutes": {
+          "type": "number",
+          "default": 30,
+          "description": "Sync interval in minutes"
+        },
+        "copilotTokenTracker.vscodeChannel": {
+          "type": "string",
+          "enum": [
+            "stable",
+            "insiders"
+          ],
+          "default": "insiders",
+          "description": "VS Code channel to scan"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "webpack --mode production",
+    "dev": "webpack --mode development --watch",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/sql.js": "^1.4.11",
+    "@types/vscode": "^1.85.0",
+    "copy-webpack-plugin": "^14.0.0",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.3.3",
+    "webpack": "^5.89.0",
+    "webpack-cli": "^5.1.4"
+  },
+  "dependencies": {
+    "sql.js": "^1.14.1"
+  }
+}
