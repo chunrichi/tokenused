@@ -47,12 +47,24 @@ export class DashboardPanel {
     setTimeout(() => this._sendDashboardData(), 500);
   }
 
-  private _sendDashboardData(): void {
+  private _sendDashboardData(range?: string): void {
     refreshDailyStats(this.db);
     const today = new Date();
-    const thirtyDaysAgo = new Date(today);
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 29);
-    const startDate = formatDateISO(thirtyDaysAgo);
+    const startDateObj = new Date(today);
+    const r = range || '30d';
+    if (r === '7d') startDateObj.setDate(today.getDate() - 6);
+    else if (r === '30d') startDateObj.setDate(today.getDate() - 29);
+    else if (r === '90d') startDateObj.setDate(today.getDate() - 89);
+    else startDateObj.setFullYear(2020, 0, 1); // 'all'
+
+    // Find the earliest date with data, use it as start if within range
+    let startDate = formatDateISO(startDateObj);
+    const earliest = this.db.prepare(
+      'SELECT MIN(date) as minDate FROM daily_stats'
+    ).get() as any;
+    if (earliest?.minDate && earliest.minDate > startDate) {
+      startDate = earliest.minDate;
+    }
     const endDate = formatDateISO(today);
 
     const summary = getSummary(this.db);
@@ -73,7 +85,7 @@ export class DashboardPanel {
       (message: any) => {
         switch (message.type) {
           case 'ready':
-            this._sendDashboardData();
+            this._sendDashboardData(message.range);
             break;
           case 'search':
             const results = searchChatContent(this.db, message.query, 20);
@@ -84,11 +96,16 @@ export class DashboardPanel {
             });
             break;
           case 'refresh':
-            this._sendDashboardData();
+            this._sendDashboardData(message.range);
             break;
           case 'openFolder':
             if (message.path) {
               vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(message.path), true);
+            }
+            break;
+          case 'openWorkspace':
+            if (message.path) {
+              vscode.commands.executeCommand('vscode.open', vscode.Uri.file(message.path));
             }
             break;
           case 'copyPath':
@@ -279,6 +296,7 @@ canvas { width: 100% !important; height: 100% !important; }
       <button data-group="month">Monthly</button>
     </div>
     <div class="chart-canvas-area"><canvas id="stackedChart"></canvas></div>
+    <div id="stackedLegend" style="display:flex;flex-wrap:wrap;gap:6px 12px;margin-top:8px;font-size:11px;"></div>
   </div>
 </div>
 
@@ -455,16 +473,20 @@ function drawStackedBarChart(canvasId, labels, modelData) {
     ctx.fillText(labels[i].slice(5), x, h - 5);
   }
 
-  // Legend
-  let lx = pad.left;
-  ctx.font = '10px sans-serif';
-  for (let m = 0; m < models.length; m++) {
-    ctx.fillStyle = colors[m % colors.length];
-    ctx.fillRect(lx, h - 15, 10, 10);
-    ctx.fillStyle = getCssVar('--vscode-descriptionForeground') || '#888';
-    ctx.fillText(models[m].name.slice(0, 15), lx + 13, h - 6);
-    lx += ctx.measureText(models[m].name.slice(0, 15)).width + 25;
-    if (lx > w - 60) break;
+  // HTML legend
+  const legendEl = document.getElementById('stackedLegend');
+  if (legendEl) {
+    legendEl.innerHTML = models.map((m, i) => {
+      let shortName = m.name;
+      const colonIdx = shortName.lastIndexOf(':::');
+      if (colonIdx >= 0) shortName = shortName.slice(colonIdx + 3);
+      else {
+        const slashIdx = shortName.lastIndexOf('/');
+        if (slashIdx >= 0) shortName = shortName.slice(slashIdx + 1);
+      }
+      shortName = shortName.slice(0, 20);
+      return '<span style="display:inline-flex;align-items:center;gap:4px;"><span style="width:10px;height:10px;border-radius:2px;background:' + colors[i % colors.length] + ';flex-shrink:0;"></span>' + shortName + '</span>';
+    }).join('');
   }
 }
 
@@ -624,7 +646,7 @@ function renderSearchResults(data) {
   const all = [];
   if (data.workspaceResults) {
     for (const ws of data.workspaceResults) {
-      all.push({ type: 'workspace', path: ws.folder_path, name: ws.name, id: ws.id });
+      all.push({ type: 'workspace', path: ws.folder_path, name: ws.name, id: ws.id, workspaceFile: ws.workspace_file });
     }
   }
   if (data.chatResults) {
@@ -638,13 +660,17 @@ function renderSearchResults(data) {
   }
   el.innerHTML = all.map(r => {
     if (r.type === 'workspace') {
+      const wsBtn = r.workspaceFile
+        ? \`<button onclick="openWorkspace('\${r.workspaceFile.replace(/'/g, "\\'")}')">Open Workspace</button>\`
+        : '';
       return \`<div class="search-result">
         <div class="result-info">
           <div class="result-path">Project: \${r.name}</div>
           <div class="result-snippet">\${r.path}</div>
         </div>
         <div class="result-actions">
-          <button onclick="openFolder('\${r.path.replace(/'/g, "\\'")}')">Open</button>
+          <button onclick="openFolder('\${r.path.replace(/'/g, "\\'")}')">Open Folder</button>
+          \${wsBtn}
           <button onclick="copyPath('\${r.path.replace(/'/g, "\\'")}')">Copy Path</button>
         </div>
       </div>\`;
@@ -663,15 +689,16 @@ function renderSearchResults(data) {
 }
 
 function openFolder(path) { vscode.postMessage({ type: 'openFolder', path }); }
+function openWorkspace(path) { vscode.postMessage({ type: 'openWorkspace', path }); }
 function copyPath(path) { vscode.postMessage({ type: 'copyPath', path }); }
 
 // Event listeners
 document.getElementById('refreshBtn').addEventListener('click', () => {
-  vscode.postMessage({ type: 'refresh' });
+  const range = document.getElementById('dateRange').value;
+  vscode.postMessage({ type: 'refresh', range });
 });
 document.getElementById('dateRange').addEventListener('change', (e) => {
-  // Re-request with new range
-  vscode.postMessage({ type: 'refresh' });
+  vscode.postMessage({ type: 'refresh', range: e.target.value });
 });
 document.getElementById('searchBtn').addEventListener('click', () => {
   const q = document.getElementById('searchInput').value.trim();
@@ -695,7 +722,7 @@ document.getElementById('stackedControls').addEventListener('click', (e) => {
 });
 
 // Initial ready
-vscode.postMessage({ type: 'ready' });
+vscode.postMessage({ type: 'ready', range: document.getElementById('dateRange').value });
 </script>
 </body>
 </html>`;

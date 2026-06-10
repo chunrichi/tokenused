@@ -79,27 +79,6 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     PRIMARY KEY (date, model_id, workspace_id, interaction_mode)
 );
 
--- FTS5 index for full-text search
-CREATE VIRTUAL TABLE IF NOT EXISTS chat_content_fts USING fts5(
-    content,
-    content=chat_content,
-    content_rowid=id
-);
-
--- Triggers to keep FTS index in sync
-CREATE TRIGGER IF NOT EXISTS chat_content_ai AFTER INSERT ON chat_content BEGIN
-    INSERT INTO chat_content_fts(rowid, content) VALUES (new.id, new.content);
-END;
-
-CREATE TRIGGER IF NOT EXISTS chat_content_ad AFTER DELETE ON chat_content BEGIN
-    INSERT INTO chat_content_fts(chat_content_fts, rowid, content) VALUES('delete', old.id, old.content);
-END;
-
-CREATE TRIGGER IF NOT EXISTS chat_content_au AFTER UPDATE ON chat_content BEGIN
-    INSERT INTO chat_content_fts(chat_content_fts, rowid, content) VALUES('delete', old.id, old.content);
-    INSERT INTO chat_content_fts(rowid, content) VALUES (new.id, new.content);
-END;
-
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_sessions_workspace ON sessions(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at);

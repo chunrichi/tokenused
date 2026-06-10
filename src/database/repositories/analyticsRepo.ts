@@ -33,7 +33,7 @@ export function refreshDailyStats(db: Database): void {
       AVG(tu.elapsed_ms) as avg_elapsed_ms
     FROM token_usage tu
     JOIN sessions s ON tu.session_id = s.session_id
-    GROUP BY date, model_id, workspace_id, interaction_mode
+    GROUP BY date, tu.model_id, s.workspace_id, s.interaction_mode
   `);
 }
 
@@ -85,7 +85,7 @@ export interface TrendPoint {
 }
 
 export function getTrend(db: Database, startDate: string, endDate: string): TrendPoint[] {
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT date,
            SUM(total_completion_tokens) as completionTokens,
            SUM(total_estimated_input_tokens) as estimatedInputTokens,
@@ -95,6 +95,19 @@ export function getTrend(db: Database, startDate: string, endDate: string): Tren
     GROUP BY date
     ORDER BY date
   `).all(startDate, endDate) as TrendPoint[];
+
+  // Fill in missing dates with zero values
+  const dataMap = new Map<string, TrendPoint>();
+  for (const row of rows) dataMap.set(row.date, row);
+
+  const result: TrendPoint[] = [];
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const ds = d.toISOString().slice(0, 10);
+    result.push(dataMap.get(ds) || { date: ds, completionTokens: 0, estimatedInputTokens: 0, requests: 0 });
+  }
+  return result;
 }
 
 export interface ModelStackedPoint {
@@ -141,13 +154,25 @@ export interface HeatmapPoint {
 }
 
 export function getHeatmapData(db: Database, startDate: string, endDate: string): HeatmapPoint[] {
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT date, SUM(total_completion_tokens + total_estimated_input_tokens) as tokens
     FROM daily_stats
     WHERE date >= ? AND date <= ?
     GROUP BY date
     ORDER BY date
   `).all(startDate, endDate) as HeatmapPoint[];
+
+  const dataMap = new Map<string, HeatmapPoint>();
+  for (const row of rows) dataMap.set(row.date, row);
+
+  const result: HeatmapPoint[] = [];
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const ds = d.toISOString().slice(0, 10);
+    result.push(dataMap.get(ds) || { date: ds, tokens: 0 });
+  }
+  return result;
 }
 
 export interface ModelBreakdownRow {

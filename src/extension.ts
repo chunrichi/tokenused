@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { SyncService } from './services/syncService';
 import { DashboardPanel } from './webview/panel';
+import { TokenUsageSidebarProvider } from './webview/sidebar';
 import { closeDatabase } from './database/db';
 
 let syncService: SyncService | undefined;
@@ -10,6 +11,19 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Initialize sync service
   syncService = new SyncService(context);
+
+  // Register sidebar view provider
+  const sidebarProvider = new TokenUsageSidebarProvider(context.extensionUri, context);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(TokenUsageSidebarProvider.viewType, sidebarProvider, {
+      webviewOptions: { retainContextWhenHidden: true }
+    })
+  );
+
+  // Refresh sidebar when sync completes
+  syncService.onSyncComplete(() => {
+    sidebarProvider.refresh();
+  });
 
   // Command: Show Dashboard
   context.subscriptions.push(

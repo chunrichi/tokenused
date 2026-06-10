@@ -13,7 +13,7 @@ export interface SearchResult {
 }
 
 export function searchChatContent(db: Database, query: string, limit: number = 20): SearchResult[] {
-  // Use FTS5 for full-text search
+  const likeQuery = `%${query}%`;
   const rows = db.prepare(`
     SELECT
       cc.session_id,
@@ -22,26 +22,25 @@ export function searchChatContent(db: Database, query: string, limit: number = 2
       COALESCE(w.name, '') as workspace_name,
       COALESCE(s.model_id, '') as model_id,
       COALESCE(s.model_name, '') as model_name,
-      snippet(chat_content_fts, 0, '<b>', '</b>', '...', 32) as snippet,
+      SUBSTR(cc.content, MAX(1, INSTR(LOWER(cc.content), LOWER(?)) - 32), 96) as snippet,
       cc.role,
       s.created_at
-    FROM chat_content_fts
-    JOIN chat_content cc ON chat_content_fts.rowid = cc.id
+    FROM chat_content cc
     JOIN sessions s ON cc.session_id = s.session_id
     LEFT JOIN workspaces w ON s.workspace_id = w.id
-    WHERE chat_content_fts MATCH ?
-    ORDER BY rank
+    WHERE cc.content LIKE ?
+    ORDER BY cc.timestamp DESC
     LIMIT ?
-  `).all(query, limit) as SearchResult[];
+  `).all(query, likeQuery, limit) as SearchResult[];
 
   return rows;
 }
 
-export function searchWorkspaces(db: Database, query: string): Array<{ id: string; folder_path: string; name: string }> {
+export function searchWorkspaces(db: Database, query: string): Array<{ id: string; folder_path: string; name: string; workspace_file: string | null }> {
   return db.prepare(`
-    SELECT id, folder_path, COALESCE(name, '') as name
+    SELECT id, folder_path, COALESCE(name, '') as name, workspace_file
     FROM workspaces
     WHERE folder_path LIKE ? OR name LIKE ? OR id LIKE ?
     LIMIT 20
-  `).all(`%${query}%`, `%${query}%`, `%${query}%`) as Array<{ id: string; folder_path: string; name: string }>;
+  `).all(`%${query}%`, `%${query}%`, `%${query}%`) as Array<{ id: string; folder_path: string; name: string; workspace_file: string | null }>;
 }
