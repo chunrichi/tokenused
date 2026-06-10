@@ -4,6 +4,10 @@
   "description": "Track and visualize your GitHub Copilot token usage",
   "version": "0.1.0",
   "publisher": "tokenused",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chunrichi/tokenused.git"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
