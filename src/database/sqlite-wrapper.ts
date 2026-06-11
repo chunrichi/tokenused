@@ -13,7 +13,7 @@ export async function initSqlJsEngine(): Promise<void> {
   SQL = await initSqlJs({
     // sql.js is external, WASM lives in node_modules/sql.js/dist/
     // __dirname = dist/, so one level up reaches the extension root
-    locateFile: (file: string) => path.join(__dirname, '..', 'node_modules', 'sql.js', 'dist', file),
+    locateFile: (file: string) => path.join(__dirname, file),
   });
 }
 

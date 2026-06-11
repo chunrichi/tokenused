@@ -16,7 +16,17 @@ export class DashboardPanel {
     this.db = db;
     this._panel.webview.html = this._getHtml();
     this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
+    this._panel.onDidChangeViewState(() => {
+      if (this._panel.visible) {
+        this._sendDashboardData();
+      }
+    }, null, this._disposables);
     this._setWebviewMessageListener();
+  }
+
+  public static revive(panel: vscode.WebviewPanel, db: Database): void {
+    DashboardPanel.currentPanel = new DashboardPanel(panel, db);
+    DashboardPanel.currentPanel._sendDashboardData();
   }
 
   public static async createOrShow(context: vscode.ExtensionContext): Promise<void> {
@@ -24,6 +34,7 @@ export class DashboardPanel {
 
     if (DashboardPanel.currentPanel) {
       DashboardPanel.currentPanel._panel.reveal(column);
+      DashboardPanel.currentPanel._sendDashboardData();
       return;
     }
 
@@ -42,9 +53,7 @@ export class DashboardPanel {
   }
 
   public refresh(): void {
-    this._panel.webview.html = this._getHtml();
-    // Send data after HTML loads
-    setTimeout(() => this._sendDashboardData(), 500);
+    this._panel.webview.postMessage({ type: 'refreshNeeded' });
   }
 
   private _sendDashboardData(range?: string): void {
@@ -376,7 +385,7 @@ function drawLineChart(canvasId, labels, datasets) {
   ctx.textAlign = 'center';
   const step = Math.max(1, Math.floor(labels.length / 7));
   for (let i = 0; i < labels.length; i += step) {
-    const x = pad.left + (plotW / (labels.length - 1)) * i;
+    const x = labels.length <= 1 ? pad.left + plotW / 2 : pad.left + (plotW / (labels.length - 1)) * i;
     ctx.fillText(labels[i].slice(5), x, h - 5);
   }
 
@@ -499,6 +508,8 @@ window.addEventListener('message', event => {
   if (msg.type === 'dashboardData') {
     currentData = msg.data;
     renderDashboard();
+  } else if (msg.type === 'refreshNeeded') {
+    vscode.postMessage({ type: 'ready', range: document.getElementById('dateRange').value });
   } else if (msg.type === 'searchResults') {
     renderSearchResults(msg.data);
   }
@@ -661,28 +672,28 @@ function renderSearchResults(data) {
   el.innerHTML = all.map(r => {
     if (r.type === 'workspace') {
       const wsBtn = r.workspaceFile
-        ? \`<button onclick="openWorkspace('\${r.workspaceFile.replace(/'/g, "\\'")}')">Open Workspace</button>\`
+        ? \`<button onclick="openWorkspace('\${escHtml(r.workspaceFile).replace(/'/g, "\\'")}')">Open Workspace</button>\`
         : '';
       return \`<div class="search-result">
         <div class="result-info">
-          <div class="result-path">Project: \${r.name}</div>
-          <div class="result-snippet">\${r.path}</div>
+          <div class="result-path">Project: \${escHtml(r.name)}</div>
+          <div class="result-snippet">\${escHtml(r.path)}</div>
         </div>
         <div class="result-actions">
-          <button onclick="openFolder('\${r.path.replace(/'/g, "\\'")}')">Open Folder</button>
+          <button onclick="openFolder('\${escHtml(r.path).replace(/'/g, "\\'")}')">Open Folder</button>
           \${wsBtn}
-          <button onclick="copyPath('\${r.path.replace(/'/g, "\\'")}')">Copy Path</button>
+          <button onclick="copyPath('\${escHtml(r.path).replace(/'/g, "\\'")}')">Copy Path</button>
         </div>
       </div>\`;
     }
     return \`<div class="search-result">
       <div class="result-info">
-        <div class="result-path">\${r.workspace_name || r.workspace_path} | \${r.model_name || r.model_id}</div>
-        <div class="result-snippet">\${r.snippet || ''}</div>
+        <div class="result-path">\${escHtml(r.workspace_name || r.workspace_path)} | \${escHtml(r.model_name || r.model_id)}</div>
+        <div class="result-snippet">\${escHtml(r.snippet || '')}</div>
       </div>
       <div class="result-actions">
-        <button onclick="openFolder('\${(r.workspace_path||'').replace(/'/g, "\\'")}')">Open</button>
-        <button onclick="copyPath('\${(r.workspace_path||'').replace(/'/g, "\\'")}')">Copy Path</button>
+        <button onclick="openFolder('\${escHtml(r.workspace_path||'').replace(/'/g, "\\'")}')">Open</button>
+        <button onclick="copyPath('\${escHtml(r.workspace_path||'').replace(/'/g, "\\'")}')">Copy Path</button>
       </div>
     </div>\`;
   }).join('');
@@ -691,6 +702,7 @@ function renderSearchResults(data) {
 function openFolder(path) { vscode.postMessage({ type: 'openFolder', path }); }
 function openWorkspace(path) { vscode.postMessage({ type: 'openWorkspace', path }); }
 function copyPath(path) { vscode.postMessage({ type: 'copyPath', path }); }
+function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 
 // Event listeners
 document.getElementById('refreshBtn').addEventListener('click', () => {

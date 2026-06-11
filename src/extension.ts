@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { SyncService } from './services/syncService';
 import { DashboardPanel } from './webview/panel';
 import { TokenUsageSidebarProvider } from './webview/sidebar';
-import { closeDatabase } from './database/db';
+import { closeDatabase, getDatabase } from './database/db';
 
 let syncService: SyncService | undefined;
 
@@ -52,6 +52,14 @@ export function activate(context: vscode.ExtensionContext) {
   syncService.onSyncComplete(() => {
     if (DashboardPanel.currentPanel) {
       DashboardPanel.currentPanel.refresh();
+    }
+  });
+
+  // Restore dashboard panel on VS Code restart
+  vscode.window.registerWebviewPanelSerializer('copilotTokenTracker', {
+    async deserializeWebviewPanel(panel: vscode.WebviewPanel, state: any) {
+      const db = await getDatabase(context);
+      DashboardPanel.revive(panel, db);
     }
   });
 

@@ -2,13 +2,13 @@ import * as vscode from 'vscode';
 import { Database } from '../database/sqlite-wrapper';
 import { getDatabase } from '../database/db';
 import { getSummary, refreshDailyStats } from '../database/repositories/analyticsRepo';
-import { formatDateISO } from '../utils/dateUtils';
 
 export class TokenUsageSidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'copilotTokenTracker.dashboard';
   private _view?: vscode.WebviewView;
   private db?: Database;
   private _initPromise: Promise<void>;
+  private _disposables: vscode.Disposable[] = [];
 
   constructor(private readonly _extensionUri: vscode.Uri, context: vscode.ExtensionContext) {
     this._initPromise = this.init(context);
@@ -23,19 +23,41 @@ export class TokenUsageSidebarProvider implements vscode.WebviewViewProvider {
     _context: vscode.WebviewViewResolveContext,
     _token: vscode.CancellationToken,
   ): void {
+    // Clean up previous listeners if resolve is called again
+    this._disposables.forEach(d => d.dispose());
+    this._disposables = [];
+
     this._view = webviewView;
     webviewView.webview.options = { enableScripts: true };
     webviewView.webview.html = this._getHtml();
-    webviewView.onDidDispose(() => { this._view = undefined; }, null, []);
-    webviewView.webview.onDidReceiveMessage((msg: any) => {
-      if (msg.type === 'openDashboard') {
-        vscode.commands.executeCommand('copilotTokenTracker.showDashboard');
-      } else if (msg.type === 'syncNow') {
-        vscode.commands.executeCommand('copilotTokenTracker.syncNow');
+
+    webviewView.onDidDispose(() => {
+      this._view = undefined;
+      this._disposables.forEach(d => d.dispose());
+      this._disposables = [];
+    }, null, this._disposables);
+
+    // Refresh data when sidebar becomes visible again
+    webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible) {
+        this._refresh();
       }
-    });
-    // Load data after a short delay
-    setTimeout(() => this._refresh(), 300);
+    }, null, this._disposables);
+
+    webviewView.webview.onDidReceiveMessage(async (msg: any) => {
+      switch (msg.type) {
+        case 'ready':
+          await this._initPromise;
+          this._refresh();
+          break;
+        case 'openDashboard':
+          vscode.commands.executeCommand('copilotTokenTracker.showDashboard');
+          break;
+        case 'syncNow':
+          vscode.commands.executeCommand('copilotTokenTracker.syncNow');
+          break;
+      }
+    }, null, this._disposables);
   }
 
   public async refresh(): Promise<void> {
@@ -87,20 +109,6 @@ body {
   color: var(--vscode-button-secondaryForeground);
 }
 .btn.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
-.model-item {
-  display: flex; align-items: center; gap: 6px; padding: 3px 0;
-  overflow: hidden;
-}
-.model-dot {
-  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
-}
-.model-name {
-  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 11px;
-}
-.model-tokens {
-  font-size: 10px; color: var(--vscode-descriptionForeground); white-space: nowrap;
-}
 .loading { color: var(--vscode-descriptionForeground); font-style: italic; padding: 20px 0; text-align: center; }
 </style>
 </head>

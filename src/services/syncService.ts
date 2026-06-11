@@ -6,6 +6,7 @@ import { parseSessionFile } from '../core/sessionParser';
 import { parseTranscriptFile } from '../core/transcriptParser';
 import { parseModelsJson } from '../core/modelsParser';
 import { estimateSessionInputTokens } from '../core/tokenEstimator';
+import { estimateCost } from './costCalculator';
 import { extractProjectName } from '../utils/formatUtils';
 import {
   upsertWorkspace, upsertSession, insertTokenUsage,
@@ -137,6 +138,11 @@ export class SyncService {
             for (const row of tokenRows) {
               row.estimated_input_tokens = perRequest;
             }
+          }
+
+          // Calculate cost estimates
+          for (const row of tokenRows) {
+            row.cost_estimate = estimateCost(row.estimated_input_tokens, row.completion_tokens, billingMultiplier);
           }
 
           // Upsert session

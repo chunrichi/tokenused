@@ -31,7 +31,7 @@ export function searchChatContent(db: Database, query: string, limit: number = 2
     WHERE cc.content LIKE ?
     ORDER BY cc.timestamp DESC
     LIMIT ?
-  `).all(query, likeQuery, limit) as SearchResult[];
+  `).all(likeQuery, query, limit) as SearchResult[];
 
   return rows;
 }
