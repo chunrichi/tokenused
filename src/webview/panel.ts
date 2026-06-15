@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { Database } from '../database/sqlite-wrapper';
 import { getDatabase } from '../database/db';
-import { getSummary, getTrend, getModelStackedData, getHeatmapData, getModelBreakdown, getToolUsageStats, refreshDailyStats } from '../database/repositories/analyticsRepo';
+import { getSummary, getTrend, getModelStackedData, getHeatmapData, getModelBreakdown, getToolUsageStats, refreshDailyStats, getHourlyUsage } from '../database/repositories/analyticsRepo';
 import { searchChatContent, searchWorkspaces } from '../database/repositories/searchRepo';
 import { formatDateISO } from '../utils/dateUtils';
 
@@ -89,10 +89,11 @@ export class DashboardPanel {
     const heatmap = getHeatmapData(this.db, startDate, endDate);
     const models = getModelBreakdown(this.db, startDate, endDate);
     const tools = getToolUsageStats(this.db, startDate, endDate);
+    const hourly = getHourlyUsage(this.db, startDate, endDate);
 
     this._panel.webview.postMessage({
       type: 'dashboardData',
-      data: { summary, trend, stacked, heatmap, models, tools }
+      data: { summary, trend, stacked, heatmap, models, tools, hourly }
     });
   }
 
@@ -266,9 +267,21 @@ canvas { width: 100% !important; height: 100% !important; }
   opacity: 0.7;
 }
 .empty-state { text-align: center; padding: 40px; color: var(--vscode-descriptionForeground); }
+.chart-tooltip {
+  position: fixed; pointer-events: none; z-index: 1000;
+  background: var(--vscode-editorWidget-background);
+  border: 1px solid var(--vscode-editorWidget-border);
+  padding: 6px 10px; border-radius: 4px;
+  font-size: 11px; white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  display: none;
+}
+.chart-tooltip .tt-label { color: var(--vscode-descriptionForeground); margin-bottom: 2px; }
+.chart-tooltip .tt-value { color: var(--vscode-textLink-foreground); font-weight: 600; }
 </style>
 </head>
 <body>
+<div class="chart-tooltip" id="chartTooltip"></div>
 <div class="header">
   <h1>Copilot Token Tracker</h1>
   <div class="header-controls">
@@ -289,10 +302,17 @@ canvas { width: 100% !important; height: 100% !important; }
   <div class="card"><div class="card-value" id="totalTokens">-</div><div class="card-label">All Time</div></div>
 </div>
 
+<div class="stacked-section">
+  <div class="stacked-chart-container">
+    <h3>Token Trend</h3>
+    <div style="height:200px;"><canvas id="trendChart"></canvas></div>
+  </div>
+</div>
+
 <div class="chart-row">
   <div class="chart-box">
-    <h3>Token Trend</h3>
-    <div class="chart-area"><canvas id="trendChart"></canvas></div>
+    <h3>24-Hour Token Usage</h3>
+    <div class="chart-area"><canvas id="hourlyChart"></canvas></div>
   </div>
   <div class="chart-box">
     <h3>Usage Heatmap</h3>
@@ -352,6 +372,20 @@ function getCssVar(name) {
 }
 
 // Chart drawing (no external libs - simple canvas)
+function showTooltip(x, y, lines) {
+  const tt = document.getElementById('chartTooltip');
+  tt.innerHTML = lines.map(l => '<div class="tt-label">' + l.label + '</div><div class="tt-value">' + l.value + '</div>').join('');
+  tt.style.display = 'block';
+  const ttRect = tt.getBoundingClientRect();
+  let left = x + 12;
+  let top = y - ttRect.height - 8;
+  if (left + ttRect.width > window.innerWidth) left = x - ttRect.width - 12;
+  if (top < 0) top = y + 12;
+  tt.style.left = left + 'px';
+  tt.style.top = top + 'px';
+}
+function hideTooltip() { document.getElementById('chartTooltip').style.display = 'none'; }
+
 function drawLineChart(canvasId, labels, datasets) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
@@ -417,6 +451,175 @@ function drawLineChart(canvasId, labels, datasets) {
     ctx.fillStyle = color + '20';
     ctx.fill();
   }
+
+  // Hover interaction
+  canvas.onmousemove = function(e) {
+    const cr = canvas.getBoundingClientRect();
+    const mx = (e.clientX - cr.left);
+    if (labels.length < 2) return;
+    const idx = Math.round(((mx - pad.left) / plotW) * (labels.length - 1));
+    if (idx < 0 || idx >= labels.length) { hideTooltip(); return; }
+    const lines = [{ label: labels[idx], value: '' }];
+    for (let d = 0; d < datasets.length; d++) {
+      lines.push({ label: datasets[d].name, value: formatTokens(datasets[d].data[idx]) });
+    }
+    showTooltip(e.clientX, e.clientY, lines);
+  };
+  canvas.onmouseleave = hideTooltip;
+}
+
+function drawPieChart(canvasId, data) {
+  // data: [{name, value, color}]
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width * 2;
+  canvas.height = rect.height * 2;
+  ctx.scale(2, 2);
+  const w = rect.width, h = rect.height;
+  const cx = w * 0.35, cy = h / 2;
+  const r = Math.min(cx - 10, cy - 10);
+  const total = data.reduce((s, d) => s + d.value, 0);
+  if (total === 0) return;
+
+  ctx.clearRect(0, 0, w, h);
+
+  let startAngle = -Math.PI / 2;
+  const slices = [];
+  for (const d of data) {
+    const sliceAngle = (d.value / total) * 2 * Math.PI;
+    const endAngle = startAngle + sliceAngle;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.arc(cx, cy, r, startAngle, endAngle);
+    ctx.closePath();
+    ctx.fillStyle = d.color;
+    ctx.fill();
+    ctx.strokeStyle = getCssVar('--vscode-editorWidget-background') || '#1e1e1e';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    slices.push({ startAngle, endAngle, ...d });
+    startAngle = endAngle;
+  }
+
+  // Legend
+  const legendX = w * 0.65;
+  const itemH = 20;
+  const startY = Math.max(10, cy - (data.length * itemH) / 2);
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'left';
+  for (let i = 0; i < data.length; i++) {
+    const y = startY + i * itemH;
+    ctx.fillStyle = data[i].color;
+    ctx.fillRect(legendX, y, 10, 10);
+    ctx.fillStyle = getCssVar('--vscode-editor-foreground') || '#ccc';
+    const pct = ((data[i].value / total) * 100).toFixed(1);
+    let shortName = data[i].name;
+    if (shortName.length > 18) shortName = shortName.slice(0, 18) + '…';
+    ctx.fillText(shortName + ' ' + formatTokens(data[i].value) + ' (' + pct + '%)', legendX + 16, y + 9);
+  }
+
+  // Hover
+  canvas.onmousemove = function(e) {
+    const cr = canvas.getBoundingClientRect();
+    const mx = e.clientX - cr.left, my = e.clientY - cr.top;
+    const dx = mx - cx, dy = my - cy;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist > r || dist < 0) { hideTooltip(); return; }
+    let angle = Math.atan2(dy, dx);
+    if (angle < -Math.PI / 2) angle += 2 * Math.PI;
+    for (const s of slices) {
+      let sa = s.startAngle, ea = s.endAngle;
+      if (sa < -Math.PI / 2) { sa += 2 * Math.PI; ea += 2 * Math.PI; }
+      if (angle >= sa && angle < ea) {
+        showTooltip(e.clientX, e.clientY, [
+          { label: s.name, value: formatTokens(s.value) + ' (' + ((s.value / total) * 100).toFixed(1) + '%)' }
+        ]);
+        return;
+      }
+    }
+    hideTooltip();
+  };
+  canvas.onmouseleave = hideTooltip;
+}
+
+function drawBarChart(canvasId, labels, datasets) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width * 2;
+  canvas.height = rect.height * 2;
+  ctx.scale(2, 2);
+  const w = rect.width, h = rect.height;
+  const pad = { top: 10, right: 10, bottom: 25, left: 45 };
+  const plotW = w - pad.left - pad.right;
+  const plotH = h - pad.top - pad.bottom;
+  const barCount = labels.length;
+  if (barCount === 0) return;
+
+  // Find max
+  let maxVal = 0;
+  for (const ds of datasets) {
+    for (const v of ds.data) if (v > maxVal) maxVal = v;
+  }
+  if (maxVal === 0) maxVal = 1;
+
+  ctx.clearRect(0, 0, w, h);
+
+  // Grid
+  ctx.strokeStyle = getCssVar('--vscode-editorWidget-border') || '#333';
+  ctx.lineWidth = 0.5;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + (plotH / 4) * i;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(w - pad.right, y); ctx.stroke();
+    ctx.fillStyle = getCssVar('--vscode-descriptionForeground') || '#888';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(formatTokens(maxVal * (1 - i/4)), pad.left - 5, y + 3);
+  }
+
+  const colors = ['#4FC3F7', '#81C784', '#FFB74D', '#E57373'];
+  const barW = Math.max(6, (plotW / barCount) * 0.6);
+  const gap = (plotW / barCount) * 0.4;
+
+  for (let i = 0; i < barCount; i++) {
+    const x = pad.left + (plotW / barCount) * i + gap / 2;
+    let yOff = 0;
+    for (let d = 0; d < datasets.length; d++) {
+      const val = datasets[d].data[i] || 0;
+      const barH = (val / maxVal) * plotH;
+      const y = pad.top + plotH - yOff - barH;
+      ctx.fillStyle = colors[d % colors.length];
+      ctx.fillRect(x, y, barW, barH);
+      yOff += barH;
+    }
+  }
+
+  // X labels
+  ctx.fillStyle = getCssVar('--vscode-descriptionForeground') || '#888';
+  ctx.font = '9px sans-serif';
+  ctx.textAlign = 'center';
+  const xStep = Math.max(1, Math.floor(barCount / 12));
+  for (let i = 0; i < barCount; i += xStep) {
+    const x = pad.left + (plotW / barCount) * i + gap / 2 + barW / 2;
+    ctx.fillText(labels[i], x, h - 5);
+  }
+
+  // Hover interaction
+  canvas.onmousemove = function(e) {
+    const cr = canvas.getBoundingClientRect();
+    const mx = e.clientX - cr.left;
+    const idx = Math.floor(((mx - pad.left) / plotW) * barCount);
+    if (idx < 0 || idx >= barCount) { hideTooltip(); return; }
+    const lines = [{ label: labels[idx], value: '' }];
+    for (let d = 0; d < datasets.length; d++) {
+      lines.push({ label: datasets[d].name, value: formatTokens(datasets[d].data[idx]) });
+    }
+    showTooltip(e.clientX, e.clientY, lines);
+  };
+  canvas.onmouseleave = hideTooltip;
 }
 
 function drawStackedBarChart(canvasId, labels, modelData) {
@@ -489,6 +692,22 @@ function drawStackedBarChart(canvasId, labels, modelData) {
     ctx.fillText(labels[i].slice(5), x, h - 5);
   }
 
+  // Hover interaction
+  canvas.onmousemove = function(e) {
+    const cr = canvas.getBoundingClientRect();
+    const mx = e.clientX - cr.left;
+    const idx = Math.floor(((mx - pad.left) / plotW) * barCount);
+    if (idx < 0 || idx >= barCount) { hideTooltip(); return; }
+    const total = totals[idx];
+    const lines = [{ label: labels[idx], value: formatTokens(total) + ' total' }];
+    for (let m = 0; m < models.length; m++) {
+      const v = models[m].data[idx] || 0;
+      if (v > 0) lines.push({ label: models[m].name, value: formatTokens(v) });
+    }
+    showTooltip(e.clientX, e.clientY, lines);
+  };
+  canvas.onmouseleave = hideTooltip;
+
   // HTML legend
   const legendEl = document.getElementById('stackedLegend');
   if (legendEl) {
@@ -545,6 +764,17 @@ function renderDashboard() {
 
   // Stacked chart
   renderStackedChart();
+
+  // Hourly chart
+  if (d.hourly && d.hourly.length > 0) {
+    const labels = d.hourly.map(h => String(h.hour).padStart(2, '0') + ':00');
+    const compData = d.hourly.map(h => h.completionTokens || 0);
+    const inputData = d.hourly.map(h => h.estimatedInputTokens || 0);
+    drawBarChart('hourlyChart', labels, [
+      { name: 'Completion', data: compData },
+      { name: 'Input (est)', data: inputData }
+    ]);
+  }
 
   // Heatmap
   renderHeatmap(d.heatmap);
@@ -628,16 +858,15 @@ function renderModelBreakdown(models) {
     el.innerHTML = '<div class="empty-state">No data</div>';
     return;
   }
-  const total = models.reduce((s, m) => s + m.total_tokens, 0);
-  const colors = ['#4FC3F7', '#81C784', '#FFB74D', '#E57373', '#BA68C8', '#4DB6AC'];
-  el.innerHTML = models.map((m, i) => {
-    const pct = total > 0 ? ((m.total_tokens / total) * 100).toFixed(1) : 0;
-    return \`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-      <div style="width:10px;height:10px;border-radius:2px;background:\${colors[i%colors.length]};flex-shrink:0;"></div>
-      <div style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">\${m.model_name || m.model_id}</div>
-      <div style="font-size:11px;color:var(--vscode-descriptionForeground);white-space:nowrap;">\${formatTokens(m.total_tokens)} (\${pct}%)</div>
-    </div>\`;
-  }).join('');
+  const colors = ['#4FC3F7', '#81C784', '#FFB74D', '#E57373', '#BA68C8', '#4DB6AC', '#F06292', '#7986CB'];
+  const pieData = models.map((m, i) => ({
+    name: m.model_name || m.model_id,
+    value: m.total_tokens,
+    color: colors[i % colors.length]
+  }));
+  el.innerHTML = '<div style="height:200px;"><canvas id="modelPieChart"></canvas></div>';
+  // Need a small delay for the DOM to update
+  requestAnimationFrame(() => drawPieChart('modelPieChart', pieData));
 }
 
 function renderTools(tools) {

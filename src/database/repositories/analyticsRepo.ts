@@ -195,3 +195,35 @@ export function getModelBreakdown(db: Database, startDate?: string, endDate?: st
   sql += ` GROUP BY ds.model_id ORDER BY total_tokens DESC`;
   return db.prepare(sql).all(...params) as ModelBreakdownRow[];
 }
+
+export interface HourlyUsageRow {
+  hour: number;
+  completionTokens: number;
+  estimatedInputTokens: number;
+  requests: number;
+}
+
+export function getHourlyUsage(db: Database, startDate?: string, endDate?: string): HourlyUsageRow[] {
+  let sql = `SELECT
+    CAST(strftime('%H', tu.timestamp / 1000, 'unixepoch', 'localtime') AS INTEGER) as hour,
+    SUM(tu.completion_tokens) as completionTokens,
+    SUM(tu.estimated_input_tokens) as estimatedInputTokens,
+    COUNT(*) as requests
+    FROM token_usage tu`;
+  const params: string[] = [];
+  if (startDate && endDate) {
+    sql += ` WHERE strftime('%Y-%m-%d', tu.timestamp / 1000, 'unixepoch', 'localtime') >= ?
+            AND strftime('%Y-%m-%d', tu.timestamp / 1000, 'unixepoch', 'localtime') <= ?`;
+    params.push(startDate, endDate);
+  }
+  sql += ` GROUP BY hour ORDER BY hour`;
+  const rows = db.prepare(sql).all(...params) as HourlyUsageRow[];
+
+  // Fill in all 24 hours
+  const result: HourlyUsageRow[] = [];
+  const map = new Map(rows.map(r => [r.hour, r]));
+  for (let h = 0; h < 24; h++) {
+    result.push(map.get(h) || { hour: h, completionTokens: 0, estimatedInputTokens: 0, requests: 0 });
+  }
+  return result;
+}
