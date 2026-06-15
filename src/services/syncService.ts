@@ -147,15 +147,20 @@ export class SyncService {
             totalElapsed += r.elapsedMs;
             if (r.timestamp > lastActiveAt) lastActiveAt = r.timestamp;
 
+            // Use per-request modelId if available, fallback to session model
+            const reqModelId = r.modelId || modelId;
+            const reqBilling = modelPricing[reqModelId] || 1;
+
             return {
               session_id: sessionData.sessionId,
               request_id: r.requestId,
               timestamp: r.timestamp,
-              model_id: modelId,
+              model_id: reqModelId,
               completion_tokens: r.completionTokens,
               estimated_input_tokens: 0,
               elapsed_ms: r.elapsedMs,
               cost_estimate: 0,
+              _billingMultiplier: reqBilling,
             };
           });
 
@@ -167,10 +172,13 @@ export class SyncService {
             }
           }
 
-          // Calculate cost estimates
+          // Calculate cost estimates using per-request billing
           for (const row of tokenRows) {
-            row.cost_estimate = estimateCost(row.estimated_input_tokens, row.completion_tokens, billingMultiplier);
+            row.cost_estimate = estimateCost(row.estimated_input_tokens, row.completion_tokens, row._billingMultiplier);
           }
+
+          // Clean up internal billing field before DB insert
+          const cleanTokenRows = tokenRows.map(({ _billingMultiplier, ...rest }) => rest);
 
           // Upsert session
           try {
@@ -199,8 +207,8 @@ export class SyncService {
           }
 
           // Insert token usage
-          if (tokenRows.length > 0) {
-            insertTokenUsage(this.db, tokenRows);
+          if (cleanTokenRows.length > 0) {
+            insertTokenUsage(this.db, cleanTokenRows);
           }
 
           // Insert chat content from transcript

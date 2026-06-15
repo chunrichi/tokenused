@@ -22,6 +22,7 @@ export interface RequestData {
   timestamp: number;
   completionTokens: number;
   elapsedMs: number;
+  modelId?: string;
   agentExtensionId?: string;
   agentExtensionVersion?: string;
 }
@@ -37,6 +38,7 @@ export function parseSessionFile(filePath: string): SessionData | null {
     if (lines.length === 0) return null;
 
     let state: any = null;
+    const allRequests = new Map<string, any>();
 
     for (const line of lines) {
       let entry: any;
@@ -55,23 +57,36 @@ export function parseSessionFile(filePath: string): SessionData | null {
       } else if (entry.kind === 2 && state) {
         // Array replacement at path k
         setAtPath(state, entry.k, entry.v);
+        // Accumulate requests: kind=2 with k=["requests"] replaces the array,
+        // but each replacement only contains the new/updated request
+        if (entry.k && entry.k[0] === 'requests' && Array.isArray(entry.v)) {
+          for (const r of entry.v) {
+            if (r.requestId) {
+              const existing = allRequests.get(r.requestId);
+              // Update if new or if completionTokens increased
+              if (!existing || (r.completionTokens || 0) > (existing.completionTokens || 0)) {
+                allRequests.set(r.requestId, r);
+              }
+            }
+          }
+        }
       }
     }
 
     if (!state) return null;
 
+    // Use accumulated requests (from all kind=2 entries) instead of final state
     const requests: RequestData[] = [];
-    if (Array.isArray(state.requests)) {
-      for (const r of state.requests) {
-        requests.push({
-          requestId: r.requestId || '',
-          timestamp: r.timestamp || 0,
-          completionTokens: r.completionTokens || 0,
-          elapsedMs: r.elapsedMs || 0,
-          agentExtensionId: r.agent?.extensionId?.value || r.agent?.extensionId || undefined,
-          agentExtensionVersion: r.agent?.extensionVersion || undefined,
-        });
-      }
+    for (const [, r] of allRequests) {
+      requests.push({
+        requestId: r.requestId || '',
+        timestamp: r.timestamp || 0,
+        completionTokens: r.completionTokens || 0,
+        elapsedMs: r.elapsedMs || 0,
+        modelId: r.modelId || undefined,
+        agentExtensionId: r.agent?.extensionId?.value || r.agent?.extensionId || undefined,
+        agentExtensionVersion: r.agent?.extensionVersion || undefined,
+      });
     }
 
     const model = state.selectedModel || state.inputState?.selectedModel;
