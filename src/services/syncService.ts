@@ -70,6 +70,7 @@ export class SyncService {
       let skippedExisting = 0;
       let skippedParseFail = 0;
       let errorCount = 0;
+      let updatedSessions = 0;
 
       runInTransaction(() => {
         // Upsert workspaces
@@ -88,13 +89,7 @@ export class SyncService {
 
         // Process sessions
         for (const sessionFile of scanResult.sessions) {
-          // Check if already synced (basic check: skip if exists)
-          const existing = this.db.prepare(
-            'SELECT session_id FROM sessions WHERE session_id = ?'
-          ).get(sessionFile.sessionId) as any;
-          if (existing) { skippedExisting++; continue; }
-
-          // Parse session file
+          // Parse session file first to check request count
           let sessionData;
           try {
             sessionData = parseSessionFile(sessionFile.chatSessionPath);
@@ -104,6 +99,19 @@ export class SyncService {
             continue;
           }
           if (!sessionData || !sessionData.sessionId) { skippedParseFail++; continue; }
+
+          // Check if already synced - skip only if request count AND tokens haven't changed
+          const existing = this.db.prepare(
+            'SELECT session_id, total_requests, total_completion_tokens FROM sessions WHERE session_id = ?'
+          ).get(sessionFile.sessionId) as any;
+          const newTotalCompletion = sessionData.requests.reduce((s, r) => s + r.completionTokens, 0);
+          if (existing && existing.total_requests >= sessionData.requests.length && existing.total_completion_tokens >= newTotalCompletion) { skippedExisting++; continue; }
+
+          // If updating, delete old data first
+          if (existing) {
+            deleteSessionData(this.db, sessionFile.sessionId);
+            updatedSessions++;
+          }
 
           console.log(`[TokenTracker] Session ${sessionFile.sessionId.slice(0, 8)}: ${sessionData.requests.length} requests, model=${sessionData.selectedModel?.identifier || 'none'}`);
 
@@ -237,7 +245,7 @@ export class SyncService {
       // Check DB state after sync
       const sessionCount = (this.db.prepare('SELECT COUNT(*) as cnt FROM sessions').get() as any)?.cnt || 0;
       const tokenCount = (this.db.prepare('SELECT COUNT(*) as cnt FROM token_usage').get() as any)?.cnt || 0;
-      const msg = `Sync: ${processedSessions} new, ${skippedExisting} existing, ${skippedParseFail} parse-fail, ${errorCount} errors | DB: ${sessionCount} sessions, ${tokenCount} tokens`;
+      const msg = `Sync: ${processedSessions} new, ${updatedSessions} updated, ${skippedExisting} skipped, ${skippedParseFail} fail | DB: ${sessionCount} sessions, ${tokenCount} tokens`;
       console.log(`[TokenTracker] ${msg}`);
       vscode.window.showInformationMessage(`Token Tracker: ${msg}`);
 

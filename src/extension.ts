@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { SyncService } from './services/syncService';
 import { DashboardPanel } from './webview/panel';
 import { TokenUsageSidebarProvider } from './webview/sidebar';
-import { closeDatabase, getDatabase } from './database/db';
+import { closeDatabase, getDatabase, clearDatabase } from './database/db';
 
 let syncService: SyncService | undefined;
 
@@ -45,6 +45,22 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand('copilotTokenTracker.searchSessions', async () => {
       await DashboardPanel.createOrShow(context);
+    })
+  );
+
+  // Command: Clear History and Resync
+  context.subscriptions.push(
+    vscode.commands.registerCommand('copilotTokenTracker.clearAndResync', async () => {
+      const confirm = await vscode.window.showWarningMessage(
+        'Clear all token tracking history and resync from scratch?',
+        { modal: true },
+        'Clear and Resync'
+      );
+      if (confirm === 'Clear and Resync') {
+        clearDatabase();
+        await syncService!.sync();
+        vscode.window.showInformationMessage('Token Tracker: History cleared and resynced.');
+      }
     })
   );
 

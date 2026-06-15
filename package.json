@@ -31,6 +31,10 @@
       {
         "command": "copilotTokenTracker.searchSessions",
         "title": "Copilot Token Tracker: Search Sessions"
+      },
+      {
+        "command": "copilotTokenTracker.clearAndResync",
+        "title": "Copilot Token Tracker: Clear History and Resync"
       }
     ],
     "viewsContainers": {
