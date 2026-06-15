@@ -53,11 +53,18 @@ export class DashboardPanel {
   }
 
   public refresh(): void {
-    this._panel.webview.postMessage({ type: 'refreshNeeded' });
+    if (this._panel.visible) {
+      this._sendDashboardData();
+    }
   }
 
   private _sendDashboardData(range?: string): void {
-    refreshDailyStats(this.db);
+    // Always rebuild daily_stats from token_usage
+    try {
+      refreshDailyStats(this.db);
+    } catch {
+      // Ignore errors
+    }
     const today = new Date();
     const startDateObj = new Date(today);
     const r = range || '30d';

@@ -67,9 +67,18 @@ export class TokenUsageSidebarProvider implements vscode.WebviewViewProvider {
 
   private _refresh(): void {
     if (!this._view || !this.db) return;
-    refreshDailyStats(this.db);
+    try { refreshDailyStats(this.db); } catch {}
     const summary = getSummary(this.db);
-    this._view.webview.postMessage({ type: 'update', data: summary });
+    this._view.webview.postMessage({ type: 'update', data: {
+      todayTokens: summary.todayTokens || 0,
+      weekTokens: summary.weekTokens || 0,
+      monthTokens: summary.monthTokens || 0,
+      totalTokens: summary.totalTokens || 0,
+      activeDays: summary.activeDays || 0,
+      totalSessions: summary.totalSessions || 0,
+      totalRequests: summary.totalRequests || 0,
+      avgResponseTime: summary.avgResponseTime || 0,
+    }});
   }
 
   private _getHtml(): string {
@@ -117,7 +126,8 @@ body {
 <script>
 const vscode = acquireVsCodeApi();
 window.addEventListener('message', event => {
-  if (event.data.type === 'update') render(event.data.data);
+  const msg = event.data;
+  if (msg.type === 'update') render(msg.data);
 });
 
 function fmt(n) {
@@ -128,40 +138,44 @@ function fmt(n) {
 }
 
 function render(d) {
+  if (!d) { document.getElementById('content').innerHTML = '<div class="loading">No data received</div>'; return; }
   document.getElementById('content').innerHTML = \`
     <div class="section">
       <div class="section-title">Token Usage</div>
       <div class="stat-row">
         <span class="stat-label">Today</span>
-        <span class="stat-value highlight">\${fmt(d.todayTokens)}</span>
+        <span class="stat-value highlight">\${fmt(d.todayTokens || 0)}</span>
       </div>
       <div class="stat-row">
         <span class="stat-label">Last 7 days</span>
-        <span class="stat-value">\${fmt(d.weekTokens)}</span>
+        <span class="stat-value">\${fmt(d.weekTokens || 0)}</span>
       </div>
       <div class="stat-row">
         <span class="stat-label">Last 30 days</span>
-        <span class="stat-value">\${fmt(d.monthTokens)}</span>
+        <span class="stat-value">\${fmt(d.monthTokens || 0)}</span>
       </div>
       <div class="stat-row">
         <span class="stat-label">All time</span>
-        <span class="stat-value">\${fmt(d.totalTokens)}</span>
+        <span class="stat-value">\${fmt(d.totalTokens || 0)}</span>
       </div>
     </div>
     <div class="section">
       <div class="section-title">Activity</div>
       <div class="stat-row">
         <span class="stat-label">Sessions</span>
-        <span class="stat-value">\${d.totalSessions}</span>
+        <span class="stat-value">\${d.totalSessions || 0}</span>
       </div>
       <div class="stat-row">
         <span class="stat-label">Requests</span>
-        <span class="stat-value">\${fmt(d.totalRequests)}</span>
+        <span class="stat-value">\${fmt(d.totalRequests || 0)}</span>
       </div>
       <div class="stat-row">
         <span class="stat-label">Avg response</span>
-        <span class="stat-value">\${(d.avgResponseTime/1000).toFixed(1)}s</span>
+        <span class="stat-value">\${((d.avgResponseTime || 0)/1000).toFixed(1)}s</span>
       </div>
+    </div>
+    <div class="section" style="font-size:10px;color:var(--vscode-descriptionForeground);border-top:1px solid var(--vscode-editorWidget-border);padding-top:6px;">
+      Debug: s=\${d.totalSessions} r=\${d.totalRequests} t=\${d.totalTokens}
     </div>
     <div class="section">
       <button class="btn" onclick="vscode.postMessage({type:'openDashboard'})">Open Dashboard</button>

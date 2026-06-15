@@ -37,6 +37,7 @@ export class SyncService {
   async startAutoSync(intervalMinutes: number): Promise<void> {
     this.stopAutoSync();
     await this._initPromise;
+    console.log('[TokenTracker] Starting auto sync');
     // Sync immediately
     this.sync();
     // Then sync periodically
@@ -61,7 +62,14 @@ export class SyncService {
       const config = vscode.workspace.getConfiguration('copilotTokenTracker');
       const channel = config.get<'stable' | 'insiders'>('vscodeChannel', 'insiders');
 
+      console.log(`[TokenTracker] sync() called, channel=${channel}, db=${!!this.db}, dbPath=${(this.db as any).dbPath || 'unknown'}`);
       const scanResult = scanCopilotStorage(channel);
+      console.log(`[TokenTracker] Scan: ${scanResult.workspaces.length} workspaces, ${scanResult.sessions.length} sessions`);
+
+      let processedSessions = 0;
+      let skippedExisting = 0;
+      let skippedParseFail = 0;
+      let errorCount = 0;
 
       runInTransaction(() => {
         // Upsert workspaces
@@ -76,17 +84,28 @@ export class SyncService {
           });
         }
 
+        console.log(`[TokenTracker] Upserted ${scanResult.workspaces.length} workspaces, processing ${scanResult.sessions.length} sessions...`);
+
         // Process sessions
         for (const sessionFile of scanResult.sessions) {
           // Check if already synced (basic check: skip if exists)
           const existing = this.db.prepare(
             'SELECT session_id FROM sessions WHERE session_id = ?'
           ).get(sessionFile.sessionId) as any;
-          if (existing) continue; // Skip already synced sessions
+          if (existing) { skippedExisting++; continue; }
 
           // Parse session file
-          const sessionData = parseSessionFile(sessionFile.chatSessionPath);
-          if (!sessionData || !sessionData.sessionId) continue;
+          let sessionData;
+          try {
+            sessionData = parseSessionFile(sessionFile.chatSessionPath);
+          } catch (e: any) {
+            console.error(`[TokenTracker] Parse error for ${sessionFile.sessionId}: ${e.message}`);
+            errorCount++;
+            continue;
+          }
+          if (!sessionData || !sessionData.sessionId) { skippedParseFail++; continue; }
+
+          console.log(`[TokenTracker] Session ${sessionFile.sessionId.slice(0, 8)}: ${sessionData.requests.length} requests, model=${sessionData.selectedModel?.identifier || 'none'}`);
 
           // Parse transcript for messages and tool calls
           let transcriptData = sessionFile.transcriptPath
@@ -126,9 +145,9 @@ export class SyncService {
               timestamp: r.timestamp,
               model_id: modelId,
               completion_tokens: r.completionTokens,
-              estimated_input_tokens: 0, // Will distribute evenly
+              estimated_input_tokens: 0,
               elapsed_ms: r.elapsedMs,
-              cost_estimate: 0, // Will calculate below
+              cost_estimate: 0,
             };
           });
 
@@ -146,24 +165,30 @@ export class SyncService {
           }
 
           // Upsert session
-          upsertSession(this.db, {
-            session_id: sessionData.sessionId,
-            workspace_id: sessionFile.workspaceStorageId,
-            model_id: modelId,
-            model_name: sessionData.selectedModel?.name || '',
-            model_family: sessionData.selectedModel?.family || '',
-            model_vendor: sessionData.selectedModel?.vendor || '',
-            interaction_mode: sessionData.interactionMode?.id || '',
-            copilot_version: transcriptData?.copilotVersion || '',
-            vscode_version: transcriptData?.vscodeVersion || '',
-            created_at: sessionData.createdAt,
-            last_active_at: lastActiveAt || sessionData.createdAt,
-            total_requests: sessionData.requests.length,
-            total_completion_tokens: totalCompletion,
-            total_estimated_input_tokens: estimatedInputTokens,
-            total_elapsed_ms: totalElapsed,
-            file_path: sessionFile.chatSessionPath,
-          });
+          try {
+            upsertSession(this.db, {
+              session_id: sessionData.sessionId,
+              workspace_id: sessionFile.workspaceStorageId,
+              model_id: modelId,
+              model_name: sessionData.selectedModel?.name || '',
+              model_family: sessionData.selectedModel?.family || '',
+              model_vendor: sessionData.selectedModel?.vendor || '',
+              interaction_mode: sessionData.interactionMode?.id || '',
+              copilot_version: transcriptData?.copilotVersion || '',
+              vscode_version: transcriptData?.vscodeVersion || '',
+              created_at: sessionData.createdAt,
+              last_active_at: lastActiveAt || sessionData.createdAt,
+              total_requests: sessionData.requests.length,
+              total_completion_tokens: totalCompletion,
+              total_estimated_input_tokens: estimatedInputTokens,
+              total_elapsed_ms: totalElapsed,
+              file_path: sessionFile.chatSessionPath,
+            });
+          } catch (e: any) {
+            console.error(`[TokenTracker] DB error upserting session ${sessionFile.sessionId}: ${e.message}`);
+            errorCount++;
+            continue;
+          }
 
           // Insert token usage
           if (tokenRows.length > 0) {
@@ -191,14 +216,34 @@ export class SyncService {
             }));
             insertToolUsage(this.db, toolRows);
           }
+
+          processedSessions++;
         }
       });
 
+      // Save immediately after transaction to ensure data persistence
+      this.db.save();
+
       // Refresh daily stats after sync
-      refreshDailyStats(this.db);
+      try {
+        refreshDailyStats(this.db);
+        this.db.save(); // Save daily_stats changes too
+      } catch (e) {
+        console.error('[TokenTracker] refreshDailyStats failed:', e);
+      }
+
       this._onSyncComplete.fire();
+
+      // Check DB state after sync
+      const sessionCount = (this.db.prepare('SELECT COUNT(*) as cnt FROM sessions').get() as any)?.cnt || 0;
+      const tokenCount = (this.db.prepare('SELECT COUNT(*) as cnt FROM token_usage').get() as any)?.cnt || 0;
+      const msg = `Sync: ${processedSessions} new, ${skippedExisting} existing, ${skippedParseFail} parse-fail, ${errorCount} errors | DB: ${sessionCount} sessions, ${tokenCount} tokens`;
+      console.log(`[TokenTracker] ${msg}`);
+      vscode.window.showInformationMessage(`Token Tracker: ${msg}`);
+
     } catch (err) {
-      console.error('Sync failed:', err);
+      console.error('[TokenTracker] Sync failed:', err);
+      vscode.window.showErrorMessage(`Token Tracker sync failed: ${err}`);
     } finally {
       this._isSyncing = false;
     }

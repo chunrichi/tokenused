@@ -6,25 +6,31 @@ import { SCHEMA_SQL, CLEAR_SQL } from './schema';
 import { DB_NAME } from '../constants';
 
 let db: Database | null = null;
+let dbInitPromise: Promise<Database> | null = null;
 
-export async function getDatabase(context: vscode.ExtensionContext): Promise<Database> {
-  if (db) return db;
+export function getDatabase(context: vscode.ExtensionContext): Promise<Database> {
+  if (db) return Promise.resolve(db);
+  if (dbInitPromise) return dbInitPromise;
 
-  await initSqlJsEngine();
+  dbInitPromise = (async () => {
+    await initSqlJsEngine();
 
-  const dbPath = path.join(context.globalStoragePath, DB_NAME);
-  // Ensure directory exists
-  const dir = path.dirname(dbPath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+    const dbPath = path.join(context.globalStoragePath, DB_NAME);
+    // Ensure directory exists
+    const dir = path.dirname(dbPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
 
-  db = new Database(dbPath);
+    db = new Database(dbPath);
 
-  // Run schema migration
-  db.exec(SCHEMA_SQL);
+    // Run schema migration
+    db.exec(SCHEMA_SQL);
 
-  return db;
+    return db;
+  })();
+
+  return dbInitPromise;
 }
 
 export function clearDatabase(): void {
