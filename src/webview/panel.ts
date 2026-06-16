@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { Database } from '../database/sqlite-wrapper';
 import { getDatabase } from '../database/db';
-import { getSummary, getTrend, getModelStackedData, getHeatmapData, getModelBreakdown, getToolUsageStats, refreshDailyStats, getHourlyUsage } from '../database/repositories/analyticsRepo';
+import { getSummary, getTrend, getModelStackedData, getHeatmapData, getModelBreakdown, getToolUsageStats, refreshDailyStats, getHourlyUsage, getWorkspaceUsage } from '../database/repositories/analyticsRepo';
 import { searchChatContent, searchWorkspaces } from '../database/repositories/searchRepo';
 import { formatDateISO } from '../utils/dateUtils';
 
@@ -92,10 +92,11 @@ export class DashboardPanel {
     const models = getModelBreakdown(this.db, startDate, endDate);
     const tools = getToolUsageStats(this.db, startDate, endDate);
     const hourly = getHourlyUsage(this.db, startDate, endDate);
+    const workspaces = getWorkspaceUsage(this.db, 10, startDate, endDate);
 
     this._panel.webview.postMessage({
       type: 'dashboardData',
-      data: { summary, trend, stacked, heatmap, models, tools, hourly }
+      data: { summary, trend, stacked, heatmap, models, tools, hourly, workspaces }
     });
   }
 
@@ -353,9 +354,17 @@ canvas { width: 100% !important; height: 100% !important; }
     <div id="modelBreakdown" style="font-size:12px;"></div>
   </div>
   <div class="chart-box">
+    <h3>Top Workspaces</h3>
+    <div id="workspaceRanking" style="font-size:12px;"></div>
+  </div>
+</div>
+
+<div class="chart-row">
+  <div class="chart-box">
     <h3>Top Tools Used</h3>
     <ul class="tool-list" id="toolList"></ul>
   </div>
+  <div class="chart-box"></div>
 </div>
 
 <script>
@@ -784,6 +793,9 @@ function renderDashboard() {
   // Model breakdown
   renderModelBreakdown(d.models);
 
+  // Workspace ranking
+  renderWorkspaceRanking(d.workspaces);
+
   // Tools
   renderTools(d.tools);
 }
@@ -869,6 +881,36 @@ function renderModelBreakdown(models) {
   el.innerHTML = '<div style="height:200px;"><canvas id="modelPieChart"></canvas></div>';
   // Need a small delay for the DOM to update
   requestAnimationFrame(() => drawPieChart('modelPieChart', pieData));
+}
+
+function renderWorkspaceRanking(workspaces) {
+  const el = document.getElementById('workspaceRanking');
+  if (!workspaces || workspaces.length === 0) {
+    el.innerHTML = '<div class="empty-state">No data</div>';
+    return;
+  }
+  const total = workspaces.reduce((s, w) => s + (w.completion_tokens || 0) + (w.estimated_input_tokens || 0), 0);
+  const medals = ['🥇', '🥈', '🥉'];
+  el.innerHTML = workspaces.map((w, i) => {
+    const tokens = (w.completion_tokens || 0) + (w.estimated_input_tokens || 0);
+    const pct = total > 0 ? ((tokens / total) * 100).toFixed(1) : 0;
+    const rank = i < 3 ? medals[i] : \`<span style="color:var(--vscode-descriptionForeground);">\${i + 1}</span>\`;
+    let shortPath = w.folder_path || '(unknown)';
+    // Extract last meaningful part of path
+    const parts = shortPath.split('/').filter(Boolean);
+    shortPath = parts.length > 2 ? '…/' + parts.slice(-2).join('/') : shortPath;
+    if (shortPath.length > 35) shortPath = shortPath.slice(0, 35) + '…';
+    return \`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;\">
+      <span style="width:24px;text-align:center;font-size:14px;">\${rank}</span>
+      <div style="flex:1;min-width:0;">
+        <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="\${escHtml(w.folder_path || '')}">\${escHtml(w.workspace_name || shortPath)}</div>
+        <div style="background:var(--vscode-editorWidget-border);border-radius:2px;height:6px;margin-top:2px;">
+          <div style="width:\${pct}%;height:100%;background:var(--vscode-textLink-foreground);border-radius:2px;opacity:0.7;"></div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--vscode-descriptionForeground);white-space:nowrap;">\${formatTokens(tokens)}<span style="margin-left:4px;">(\${pct}%)</span></div>
+    </div>\`;
+  }).join('');
 }
 
 function renderTools(tools) {

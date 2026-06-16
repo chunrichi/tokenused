@@ -227,3 +227,39 @@ export function getHourlyUsage(db: Database, startDate?: string, endDate?: strin
   }
   return result;
 }
+
+export interface WorkspaceUsageRow {
+  workspace_id: string;
+  folder_path: string;
+  workspace_name: string;
+  completion_tokens: number;
+  estimated_input_tokens: number;
+  request_count: number;
+  session_count: number;
+}
+
+export function getWorkspaceUsage(db: Database, limit: number = 10, startDate?: string, endDate?: string): WorkspaceUsageRow[] {
+  let sql = `SELECT
+    s.workspace_id,
+    w.folder_path,
+    w.name as workspace_name,
+    SUM(tu.completion_tokens) as completion_tokens,
+    SUM(tu.estimated_input_tokens) as estimated_input_tokens,
+    COUNT(*) as request_count,
+    COUNT(DISTINCT tu.session_id) as session_count
+  FROM token_usage tu
+  JOIN sessions s ON tu.session_id = s.session_id
+  LEFT JOIN workspaces w ON s.workspace_id = w.id`;
+  const params: string[] = [];
+  const conditions: string[] = [];
+  if (startDate && endDate) {
+    conditions.push(`strftime('%Y-%m-%d', tu.timestamp / 1000, 'unixepoch', 'localtime') >= ?`);
+    conditions.push(`strftime('%Y-%m-%d', tu.timestamp / 1000, 'unixepoch', 'localtime') <= ?`);
+    params.push(startDate, endDate);
+  }
+  if (conditions.length > 0) {
+    sql += ` WHERE ${conditions.join(' AND ')}`;
+  }
+  sql += ` GROUP BY s.workspace_id ORDER BY completion_tokens + estimated_input_tokens DESC LIMIT ${limit}`;
+  return db.prepare(sql).all(...params) as WorkspaceUsageRow[];
+}
