@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
 import { Database } from '../database/sqlite-wrapper';
 import { getDatabase, runInTransaction } from '../database/db';
 import { scanCopilotStorage } from '../core/fileScanner';
@@ -65,9 +66,18 @@ export class SyncService {
       const config = vscode.workspace.getConfiguration('copilotTokenTracker');
       const channel = config.get<'stable' | 'insiders'>('vscodeChannel', 'insiders');
 
-      console.log(`[TokenTracker] sync() called, channel=${channel}, db=${!!this.db}, dbPath=${(this.db as any).dbPath || 'unknown'}`);
       const scanResult = scanCopilotStorage(channel);
-      console.log(`[TokenTracker] Scan: ${scanResult.workspaces.length} workspaces, ${scanResult.sessions.length} sessions`);
+
+      // Pre-load existing sessions from DB into a cache for fast lookup
+      const existingSessions = new Map<string, { totalRequests: number; totalCompletion: number; filePath: string }>();
+      const existingRows = this.db.prepare('SELECT session_id, total_requests, total_completion_tokens, file_path FROM sessions').all() as any[];
+      for (const row of existingRows) {
+        existingSessions.set(row.session_id, {
+          totalRequests: row.total_requests,
+          totalCompletion: row.total_completion_tokens,
+          filePath: row.file_path,
+        });
+      }
 
       let processedSessions = 0;
       let skippedExisting = 0;
@@ -88,27 +98,39 @@ export class SyncService {
           });
         }
 
-        console.log(`[TokenTracker] Upserted ${scanResult.workspaces.length} workspaces, processing ${scanResult.sessions.length} sessions...`);
-
-        // Process sessions
+      // Process sessions
         for (const sessionFile of scanResult.sessions) {
-          // Parse session file first to check request count
+          const existing = existingSessions.get(sessionFile.sessionId);
+
+          // Fast skip: if already in DB with requests > 0 and file mtime is old, skip parsing
+          if (existing && existing.totalRequests > 0) {
+            try {
+              const stat = fs.statSync(sessionFile.chatSessionPath);
+              // If file was last modified more than 5 minutes ago, assume no new data
+              if (Date.now() - stat.mtimeMs > 5 * 60 * 1000) {
+                skippedExisting++;
+                continue;
+              }
+            } catch { /* proceed with parse */ }
+          }
+
+          // Parse session file
           let sessionData;
           try {
             sessionData = parseSessionFile(sessionFile.chatSessionPath);
           } catch (e: any) {
-            console.error(`[TokenTracker] Parse error for ${sessionFile.sessionId}: ${e.message}`);
             errorCount++;
             continue;
           }
           if (!sessionData || !sessionData.sessionId) { skippedParseFail++; continue; }
 
-          // Check if already synced - skip only if request count AND tokens haven't changed
-          const existing = this.db.prepare(
-            'SELECT session_id, total_requests, total_completion_tokens FROM sessions WHERE session_id = ?'
-          ).get(sessionFile.sessionId) as any;
           const newTotalCompletion = sessionData.requests.reduce((s, r) => s + r.completionTokens, 0);
-          if (existing && existing.total_requests >= sessionData.requests.length && existing.total_completion_tokens >= newTotalCompletion) { skippedExisting++; continue; }
+
+          // Skip if already synced and data hasn't changed
+          if (existing && existing.totalRequests >= sessionData.requests.length && existing.totalCompletion >= newTotalCompletion) {
+            skippedExisting++;
+            continue;
+          }
 
           // If updating, delete old data first
           if (existing) {
