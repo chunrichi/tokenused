@@ -890,25 +890,23 @@ function renderWorkspaceRanking(workspaces) {
     return;
   }
   const total = workspaces.reduce((s, w) => s + (w.completion_tokens || 0) + (w.estimated_input_tokens || 0), 0);
-  const medals = ['🥇', '🥈', '🥉'];
+  const maxTokens = workspaces[0] ? (workspaces[0].completion_tokens || 0) + (workspaces[0].estimated_input_tokens || 0) : 1;
   el.innerHTML = workspaces.map((w, i) => {
     const tokens = (w.completion_tokens || 0) + (w.estimated_input_tokens || 0);
-    const pct = total > 0 ? ((tokens / total) * 100).toFixed(1) : 0;
-    const rank = i < 3 ? medals[i] : \`<span style="color:var(--vscode-descriptionForeground);">\${i + 1}</span>\`;
+    const barPct = maxTokens > 0 ? (tokens / maxTokens) * 100 : 0;
     let shortPath = w.folder_path || '(unknown)';
-    // Extract last meaningful part of path
     const parts = shortPath.split('/').filter(Boolean);
     shortPath = parts.length > 2 ? '…/' + parts.slice(-2).join('/') : shortPath;
     if (shortPath.length > 35) shortPath = shortPath.slice(0, 35) + '…';
-    return \`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;\">
-      <span style="width:24px;text-align:center;font-size:14px;">\${rank}</span>
+    return \`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;" onclick="openFolder('\${escHtml(w.folder_path || '').replace(/'/g, "\\\\'")}')" title="\${escHtml(w.folder_path || '')}">
+      <span style="width:20px;text-align:right;color:var(--vscode-descriptionForeground);font-size:11px;">\${i + 1}</span>
       <div style="flex:1;min-width:0;">
-        <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="\${escHtml(w.folder_path || '')}">\${escHtml(w.workspace_name || shortPath)}</div>
+        <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">\${escHtml(w.workspace_name || shortPath)}</div>
         <div style="background:var(--vscode-editorWidget-border);border-radius:2px;height:6px;margin-top:2px;">
-          <div style="width:\${pct}%;height:100%;background:var(--vscode-textLink-foreground);border-radius:2px;opacity:0.7;"></div>
+          <div style="width:\${barPct}%;height:100%;background:var(--vscode-textLink-foreground);border-radius:2px;opacity:0.7;"></div>
         </div>
       </div>
-      <div style="font-size:11px;color:var(--vscode-descriptionForeground);white-space:nowrap;">\${formatTokens(tokens)}<span style="margin-left:4px;">(\${pct}%)</span></div>
+      <div style="font-size:12px;color:var(--vscode-textLink-foreground);white-space:nowrap;">\${formatTokens(tokens)}</div>
     </div>\`;
   }).join('');
 }
