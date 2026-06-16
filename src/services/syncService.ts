@@ -59,6 +59,9 @@ export class SyncService {
     await this._initPromise;
 
     try {
+      // Reload DB from disk to pick up changes from other VS Code windows
+      this.db.reload();
+
       const config = vscode.workspace.getConfiguration('copilotTokenTracker');
       const channel = config.get<'stable' | 'insiders'>('vscodeChannel', 'insiders');
 

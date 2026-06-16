@@ -67,6 +67,8 @@ export class TokenUsageSidebarProvider implements vscode.WebviewViewProvider {
 
   private _refresh(): void {
     if (!this._view || !this.db) return;
+    // Reload from disk to pick up changes from other windows
+    this.db.reload();
     try { refreshDailyStats(this.db); } catch {}
     const summary = getSummary(this.db);
     this._view.webview.postMessage({ type: 'update', data: {

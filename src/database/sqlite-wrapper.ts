@@ -127,6 +127,17 @@ export class Database {
     fs.writeFileSync(this.dbPath, Buffer.from(data));
   }
 
+  /**
+   * Reload database from disk to pick up changes from other VS Code windows.
+   * This prevents cross-window data loss when multiple windows sync concurrently.
+   */
+  reload(): void {
+    if (!this.dbPath || !fs.existsSync(this.dbPath)) return;
+    const data = new Uint8Array(fs.readFileSync(this.dbPath));
+    this.db.close();
+    this.db = new SQL.Database(data);
+  }
+
   private scheduleSave(): void {
     if (!this.dbPath) return;
     if (this.saveTimer) clearTimeout(this.saveTimer);

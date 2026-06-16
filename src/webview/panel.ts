@@ -59,6 +59,8 @@ export class DashboardPanel {
   }
 
   private _sendDashboardData(range?: string): void {
+    // Reload from disk to pick up changes from other windows
+    this.db.reload();
     // Always rebuild daily_stats from token_usage
     try {
       refreshDailyStats(this.db);
