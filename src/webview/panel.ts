@@ -723,14 +723,7 @@ function drawStackedBarChart(canvasId, labels, modelData) {
   const legendEl = document.getElementById('stackedLegend');
   if (legendEl) {
     legendEl.innerHTML = models.map((m, i) => {
-      let shortName = m.name;
-      const colonIdx = shortName.lastIndexOf(':::');
-      if (colonIdx >= 0) shortName = shortName.slice(colonIdx + 3);
-      else {
-        const slashIdx = shortName.lastIndexOf('/');
-        if (slashIdx >= 0) shortName = shortName.slice(slashIdx + 1);
-      }
-      shortName = shortName.slice(0, 20);
+      const shortName = formatModelName(m.name).slice(0, 20);
       return '<span style="display:inline-flex;align-items:center;gap:4px;"><span style="width:10px;height:10px;border-radius:2px;background:' + colors[i % colors.length] + ';flex-shrink:0;"></span>' + shortName + '</span>';
     }).join('');
   }
@@ -866,6 +859,17 @@ function renderHeatmap(data) {
   }
 }
 
+function formatModelName(name) {
+  if (!name) return '(unknown)';
+  // gcmp.deepseek/gcmp.deepseek:::deepseek-v4-pro -> deepseek-v4-pro
+  // gcmp.xiaomimimo/gcmp.xiaomimimo:::mimo-v2.5 -> mimo-v2.5
+  const colonIdx = name.lastIndexOf(':::');
+  if (colonIdx >= 0) return name.slice(colonIdx + 3);
+  const slashIdx = name.lastIndexOf('/');
+  if (slashIdx >= 0) return name.slice(slashIdx + 1);
+  return name;
+}
+
 function renderModelBreakdown(models) {
   const el = document.getElementById('modelBreakdown');
   if (!models || models.length === 0) {
@@ -874,12 +878,11 @@ function renderModelBreakdown(models) {
   }
   const colors = ['#4FC3F7', '#81C784', '#FFB74D', '#E57373', '#BA68C8', '#4DB6AC', '#F06292', '#7986CB'];
   const pieData = models.map((m, i) => ({
-    name: m.model_name || m.model_id,
+    name: formatModelName(m.model_name || m.model_id),
     value: m.total_tokens,
     color: colors[i % colors.length]
   }));
   el.innerHTML = '<div style="height:200px;"><canvas id="modelPieChart"></canvas></div>';
-  // Need a small delay for the DOM to update
   requestAnimationFrame(() => drawPieChart('modelPieChart', pieData));
 }
 
