@@ -263,3 +263,31 @@ export function getWorkspaceUsage(db: Database, limit: number = 10, startDate?: 
   sql += ` GROUP BY s.workspace_id ORDER BY completion_tokens + estimated_input_tokens DESC LIMIT ${limit}`;
   return db.prepare(sql).all(...params) as WorkspaceUsageRow[];
 }
+
+export interface RecentSessionRow {
+  session_id: string;
+  workspace_name: string;
+  folder_path: string;
+  model_id: string;
+  total_tokens: number;
+  total_requests: number;
+  last_active_at: number;
+}
+
+export function getRecentSessions(db: Database, limit: number = 10): RecentSessionRow[] {
+  return db.prepare(`
+    SELECT
+      s.session_id,
+      COALESCE(w.name, '') as workspace_name,
+      COALESCE(w.folder_path, '') as folder_path,
+      s.model_id,
+      s.total_completion_tokens + s.total_estimated_input_tokens as total_tokens,
+      s.total_requests,
+      s.last_active_at
+    FROM sessions s
+    LEFT JOIN workspaces w ON s.workspace_id = w.id
+    WHERE s.total_requests > 0
+    ORDER BY s.last_active_at DESC
+    LIMIT ${limit}
+  `).all() as RecentSessionRow[];
+}

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { Database } from '../database/sqlite-wrapper';
 import { getDatabase } from '../database/db';
-import { getSummary, getTrend, getModelStackedData, getHeatmapData, getModelBreakdown, getToolUsageStats, refreshDailyStats, getHourlyUsage, getWorkspaceUsage } from '../database/repositories/analyticsRepo';
+import { getSummary, getTrend, getModelStackedData, getHeatmapData, getModelBreakdown, getToolUsageStats, refreshDailyStats, getHourlyUsage, getWorkspaceUsage, getRecentSessions } from '../database/repositories/analyticsRepo';
 import { searchChatContent, searchWorkspaces } from '../database/repositories/searchRepo';
 import { formatDateISO } from '../utils/dateUtils';
 
@@ -93,10 +93,11 @@ export class DashboardPanel {
     const tools = getToolUsageStats(this.db, startDate, endDate);
     const hourly = getHourlyUsage(this.db, startDate, endDate);
     const workspaces = getWorkspaceUsage(this.db, 10, startDate, endDate);
+    const recentSessions = getRecentSessions(this.db, 10);
 
     this._panel.webview.postMessage({
       type: 'dashboardData',
-      data: { summary, trend, stacked, heatmap, models, tools, hourly, workspaces }
+      data: { summary, trend, stacked, heatmap, models, tools, hourly, workspaces, recentSessions }
     });
   }
 
@@ -364,7 +365,10 @@ canvas { width: 100% !important; height: 100% !important; }
     <h3>Top Tools Used</h3>
     <ul class="tool-list" id="toolList"></ul>
   </div>
-  <div class="chart-box"></div>
+  <div class="chart-box">
+    <h3>Recent Sessions</h3>
+    <div id="recentSessions" style="font-size:12px;max-height:280px;overflow-y:auto;"></div>
+  </div>
 </div>
 
 <script>
@@ -791,6 +795,9 @@ function renderDashboard() {
 
   // Tools
   renderTools(d.tools);
+
+  // Recent sessions
+  renderRecentSessions(d.recentSessions);
 }
 
 function renderStackedChart() {
@@ -912,6 +919,44 @@ function renderWorkspaceRanking(workspaces) {
       <div style="font-size:12px;color:var(--vscode-textLink-foreground);white-space:nowrap;">\${formatTokens(tokens)}</div>
     </div>\`;
   }).join('');
+}
+
+function renderRecentSessions(sessions) {
+  const el = document.getElementById('recentSessions');
+  if (!sessions || sessions.length === 0) {
+    el.innerHTML = '<div class="empty-state">No data</div>';
+    return;
+  }
+  el.innerHTML = sessions.map(s => {
+    const timeAgo = getTimeAgo(s.last_active_at);
+    let shortPath = s.folder_path || '(unknown)';
+    const parts = shortPath.split('/').filter(Boolean);
+    shortPath = parts.length > 2 ? '…/' + parts.slice(-2).join('/') : shortPath;
+    if (shortPath.length > 30) shortPath = shortPath.slice(0, 30) + '…';
+    const modelName = formatModelName(s.model_id);
+    return \`<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--vscode-editorWidget-border);cursor:pointer;" onclick="openFolder('\${escHtml(s.folder_path || '').replace(/'/g, "\\\\'")}')" title="\${escHtml(s.folder_path || '')}">
+      <div style="flex:1;min-width:0;">
+        <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;">\${escHtml(s.workspace_name || shortPath)}</div>
+        <div style="font-size:11px;color:var(--vscode-descriptionForeground);">\${modelName} · \${s.total_requests} requests</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0;">
+        <div style="font-size:12px;color:var(--vscode-textLink-foreground);">\${formatTokens(s.total_tokens)}</div>
+        <div style="font-size:10px;color:var(--vscode-descriptionForeground);">\${timeAgo}</div>
+      </div>
+    </div>\`;
+  }).join('');
+}
+
+function getTimeAgo(timestamp) {
+  const now = Date.now();
+  const diff = now - timestamp;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + 'm ago';
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return hours + 'h ago';
+  const days = Math.floor(hours / 24);
+  return days + 'd ago';
 }
 
 function renderTools(tools) {
